@@ -10,8 +10,91 @@
 Control de hilos con wait/notify. Productor/consumidor.
 
 1. Revise el funcionamiento del programa y ejecútelo. Mientras esto ocurren, ejecute jVisualVM y revise el consumo de CPU del proceso correspondiente. A qué se debe este consumo?, cual es la clase responsable?
+
+![alt text](image.png)
+
+la clase responsable es Consumer.java. en su run() tiene un ciclo infinito que se la pasa preguntando por la cola
+con queue.size() y el .poll(), y aunque la cola este vacia igual sigue dando vueltas sin parar y sin bloquearse nunca.
+eso es una espera activa (busy waiting), y por eso el hilo se queda pegado quemando un nucleo completo.
+en la imagen se ve el consumo fijo en 8,4% todo el tiempo sin picos, que es justo un nucleo al 100% repartido
+entre todos los nucleos de la maquina.
+
+Producer.java tambien tiene un ciclo infinito, pero ese no es el problema: como tiene el Thread.sleep(1000) el hilo
+se duerme y suelta la cpu en cada vuelta, asi que casi no consume nada. un ciclo infinito por si solo no gasta cpu,
+lo que la gasta es no bloquearse nunca dentro del ciclo.
+
 2. Haga los ajustes necesarios para que la solución use más eficientemente la CPU, teniendo en cuenta que -por ahora- la producción es lenta y el consumo es rápido. Verifique con JVisualVM que el consumo de CPU se reduzca.
+
+para quitar la espera activa se uso wait/notify.
+
+en Consumer.java, si la cola esta vacia el hilo llama a queue.wait(), o sea se duerme y suelta el lock,
+en vez de quedarse preguntando por el size(). el wait va dentro de un while y no de un if, porque un hilo
+puede despertar sin que nadie lo haya notificado (spurious wakeup), asi que al despertar hay que volver a
+revisar que la cola de verdad tenga algo. si fuera un if, el poll() podria devolver null y reventar con
+NullPointerException al asignarlo a un int.
+
+![alt text](image-3.png)
+
+en Producer.java se agrego queue.notify() justo despues del queue.add(), dentro de un synchronized sobre la
+misma cola. ese notify es el que despierta al consumidor cuando ya hay algo para consumir. el Thread.sleep(1000)
+se dejo porque en este punto la produccion es lenta, y quedo por fuera del synchronized para no dormirse con
+el lock en la mano y bloquear al otro hilo sin necesidad.
+
+![alt text](image-2.png)
+
+con eso el consumo de cpu bajo de 8,4% a 0,7% y la grafica se queda pegada en el piso. el consumidor ya no
+gasta cpu mientras espera: solo se activa cuando de verdad hay un elemento.
+
+![alt text](image-1.png)
+
 3. Haga que ahora el productor produzca muy rápido, y el consumidor consuma lento. Teniendo en cuenta que el productor conoce un límite de Stock (cuantos elementos debería tener, a lo sumo en la cola), haga que dicho límite se respete. Revise el API de la colección usada como cola para ver cómo garantizar que dicho límite no se supere. Verifique que, al poner un límite pequeño para el 'stock', no haya consumo alto de CPU ni errores.
+
+aca se invirtieron las velocidades: el Thread.sleep(1000) se le quito al productor y se le paso al consumidor.
+ademas en StartProduction se le pasa un stockLimit de 5 en vez de Long.MAX_VALUE, que era como no tener limite
+(el campo stockLimit ya existia en Producer pero no lo usaba nadie).
+
+en Producer.java el limite se respeta con un while (queue.size() >= stockLimit) que llama a queue.wait(). o sea
+el productor tambien se duerme, pero por la razon contraria al consumidor: el se duerme cuando la cola esta
+llena. es importante que sea wait() y no un ciclo vacio preguntando por el size(), porque un ciclo vacio si
+respetaria el limite pero volveria a quemar la cpu, que es justo el problema del punto 1.
+
+![alt text](image-4.png)
+
+en Consumer.java se agrego queue.notifyAll() despues del poll(), para avisarle al productor que ya se libero un
+puesto. se uso notifyAll() y no notify() porque ahora sobre la misma cola hay dos condiciones distintas (que no
+este vacia y que no este llena), y con notify() se podria despertar al hilo equivocado y dejar el programa trabado.
+
+![alt text](image-5.png)
+
+el consumo de cpu quedo en 0,1% aun con el productor corriendo sin ningun sleep, o sea a toda velocidad. eso pasa
+porque el productor llena la cola hasta 5 y de ahi en adelante se la pasa dormido esperando a que el consumidor
+saque algo, asi que termina yendo al ritmo del consumidor. tampoco salen errores: como el limite lo hace cumplir
+el wait(), el queue.add() nunca se encuentra la cola llena.
+
+![alt text](image-6.png)
+
+en la salida por consola se ve que el stock nunca pasa de 5:
+
+```
+Producer added 4 - stock: 1
+Producer added 44 - stock: 2
+Producer added 47 - stock: 3
+Producer added 140 - stock: 4
+Producer added 173 - stock: 5
+Consumer consumes 4 - stock: 4
+Producer added 201 - stock: 5
+Consumer consumes 44 - stock: 4
+Producer added 210 - stock: 5
+Consumer consumes 47 - stock: 4
+```
+
+en los primeros 5 segundos, antes de que arranque el consumidor, solo se imprimen 5 lineas. un productor sin
+freno habria imprimido millones, asi que esas 5 lineas son la prueba de que el hilo quedo dormido en wait() y
+no girando.
+
+![alt text](image-4.png)
+
+![alt text](image-5.png)
 
 
 ##### Parte II. – Antes de terminar la clase.
@@ -20,6 +103,38 @@ Teniendo en cuenta los conceptos vistos de condición de carrera y sincronizaci�
 
 - La búsqueda distribuida se detenga (deje de buscar en las listas negras restantes) y retorne la respuesta apenas, en su conjunto, los hilos hayan detectado el número de ocurrencias requerido que determina si un host es confiable o no (_BLACK_LIST_ALARM_COUNT_).
 - Lo anterior, garantizando que no se den condiciones de carrera.
+
+para que la busqueda se detenga apenas los hilos junten las 5 ocurrencias se uso un AtomicInteger compartido
+entre todos los hilos.
+
+en la corrida se ve que se revisaron 57.971 listas de 80.000, o sea la busqueda si se detuvo antes de recorrer
+todo. el host igual quedo reportado como NOT trustworthy y se encontraron las mismas 5 listas
+[29, 10034, 20200, 31000, 70500], asi que parar temprano no cambio el resultado. ese numero cambia en cada
+ejecucion porque depende de cual hilo llegue primero a la quinta ocurrencia, pero nunca llega a 80.000.
+
+![alt text](image-9.png)
+
+en HostSearchThread cada hilo recibe por constructor la misma referencia del contador (ocurrenciasTotales) y el
+tope (alarmCount). el for gano una segunda condicion: sigue mientras le queden listas Y mientras entre todos no
+se hayan encontrado 5 ocurrencias. cuando encuentra una la guarda en su lista local y ademas hace
+incrementAndGet() sobre el contador compartido. asi cada hilo se detiene solo, porque un hilo no se puede
+detener desde afuera: lo unico que se puede hacer es que el mismo revise una condicion y salga de su ciclo.
+
+![alt text](image-7.png)
+
+en HostBlackListsValidator el AtomicInteger se crea una sola vez y se le pasa a los 500 hilos, o sea todos
+apuntan al mismo objeto. si cada hilo tuviera el suyo nunca sabrian el total. el reparto de segmentos y los
+join() quedaron igual, y el reporte de confiable / no confiable quedo despues del ciclo para que se haga una
+sola vez.
+
+![alt text](image-8.png)
+
+se uso AtomicInteger y no un int normal porque contador++ no es atomico: son tres pasos (leer, sumar, escribir)
+y dos hilos pueden leer el mismo valor y perder un incremento, que es justo la condicion de carrera que pide
+evitar el enunciado. si se perdieran ocurrencias el contador podria no llegar nunca a 5 y el host terminaria
+reportado como confiable siendo peligroso. incrementAndGet() hace los tres pasos como una sola operacion
+indivisible.
+
 
 ##### Parte III. – Avance para el martes, antes de clase.
 
