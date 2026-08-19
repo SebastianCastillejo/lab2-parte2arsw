@@ -10,8 +10,85 @@
 Control de hilos con wait/notify. Productor/consumidor.
 
 1. Revise el funcionamiento del programa y ejecútelo. Mientras esto ocurren, ejecute jVisualVM y revise el consumo de CPU del proceso correspondiente. A qué se debe este consumo?, cual es la clase responsable?
-2. Haga los ajustes necesarios para que la solución use más eficientemente la CPU, teniendo en cuenta que -por ahora- la producción es lenta y el consumo es rápido. Verifique con JVisualVM que el consumo de CPU se reduzca.
+
+![alt text](img/image.png)
+
+la clase responsable es Consumer.java. en su run() el cual tiene un ciclo infinito que se la pasa preguntando por la cola
+con queue.size() y el .poll(), y aunque la cola este vacia igual sigue  sin parar y sin bloquearse nunca, investigando 
+eso es una espera activa o busy waiting y por eso el hilo sigue unsando el nucleo completo.
+en la imagen se ve el consumo fijo en 8,4% todo el tiempo sin picos, que es justo un nucleo al 100% repartido
+entre todos los nucleos de la maquina
+
+Producer.java tambien tiene un ciclo infinito, como tiene el Thread.sleep(1000) el hilo
+se duerme y libera la cpu en cada vuelta, por lo cual no consume casi nada.
+
+hay que tener en cuenta que un ciclo infinito por si solo no gasta como tal la cpu, lo que la gasta es no bloquearse nunca dentro del ciclo
+
+2. Haga los ajustes necesarios para que la solución use más eficientemente la CPU, teniendo en cuenta que -por ahora- la producción es lenta y el consumo es rápido. Verifique con JVisualVM que el consumo de CPU se reduzca
+
+para quitar la espera activa se uso wait y notify
+
+en Consumer.java si la cola esta vacia el hilo llama a queue.wait(), o sea se duerme y suelta el lock,
+en vez de quedarse esperando por el size(). el wait va dentro de un while y no de un if, ya que un hilo
+puede despertar sin que nadie lo haya notificado, asi al despertar hay que volver a
+mirar que la cola de verdad tenga algo
+
+![alt text](img/image-3.png)
+
+en Producer.java se agrego queue.notify() justo despues del queue.add(), dentro de un synchronized sobre la
+misma cola. ese notify es el que despierta al consumidor cuando ya hay algo para consumir. el Thread.sleep(1000)
+se dejo porque en este punto la produccion es lenta, y quedo por fuera del synchronized para no dormirse con
+el lock en la mano y bloquear al otro hilo sin necesidad
+
+![alt text](img/image-2.png)
+
+con eso el consumo de cpu bajo de 8,4% a 0,7% y la grafica se queda pegada en el piso. el consumidor ya no
+gasta cpu mientras espera: solo se activa cuando de verdad hay un elemento
+
+![alt text](img/image-1.png)
+
 3. Haga que ahora el productor produzca muy rápido, y el consumidor consuma lento. Teniendo en cuenta que el productor conoce un límite de Stock (cuantos elementos debería tener, a lo sumo en la cola), haga que dicho límite se respete. Revise el API de la colección usada como cola para ver cómo garantizar que dicho límite no se supere. Verifique que, al poner un límite pequeño para el 'stock', no haya consumo alto de CPU ni errores.
+
+el Thread.sleep(1000) se le quito al productor y se lo pase al consumidor.
+ademas en StartProduction se le paso un stockLimit de 5 en vez de Long.MAX_VALUE, que era como no tener limite
+en Producer.java el limite se respeta con un while que llama a queue.wait(). 
+
+el consumidor se duerme cuando la cola esta llena. es importante que sea wait() y no un ciclo vacio preguntando por el size(), ya que  un ciclo vacio si
+respeta el limite pero llegaria a quemar la cpu, que es justo el problema del primer punto 
+
+![alt text](img/image-4.png)
+
+en Consumer.java se agrego queue.notifyAll() despues del poll(), para avisarle al productor que ya se libero un
+puesto. se uso notifyAll() y no notify() porque ahora sobre la misma cola hay dos condiciones distintas, y con notify() 
+se podria despertar al hilo equivocado y dejar el programa trabado
+
+![alt text](img/image-5.png)
+
+el consumo de cpu quedo en 0,1% aun con el productor corriendo sin ningun sleep, o sea a toda velocidad. eso pasa
+porque el productor llena la cola hasta 5 y de ahi en adelante se la pasa dormido esperando a que el consumidor
+saque algo, asi que termina yendo al ritmo del consumidor. tampoco salen errores: como el limite lo hace cumplir
+el wait(), el queue.add() nunca se encuentra la cola llena
+
+![alt text](img/image-6.png)
+
+en la salida por consola se ve que el stock nunca pasa de 5:
+
+```
+Producer added 4 - stock: 1
+Producer added 44 - stock: 2
+Producer added 47 - stock: 3
+Producer added 140 - stock: 4
+Producer added 173 - stock: 5
+Consumer consumes 4 - stock: 4
+Producer added 201 - stock: 5
+Consumer consumes 44 - stock: 4
+Producer added 210 - stock: 5
+Consumer consumes 47 - stock: 4
+```
+
+en los primeros 5 segundos, antes de que arranque el consumidor, solo se imprimen 5 lineas. un productor sin
+freno habria imprimido millones, asi que esas 5 lineas son la prueba de que el hilo quedo dormido en wait() y
+no girando
 
 
 ##### Parte II. – Antes de terminar la clase.
@@ -20,6 +97,38 @@ Teniendo en cuenta los conceptos vistos de condición de carrera y sincronizaci�
 
 - La búsqueda distribuida se detenga (deje de buscar en las listas negras restantes) y retorne la respuesta apenas, en su conjunto, los hilos hayan detectado el número de ocurrencias requerido que determina si un host es confiable o no (_BLACK_LIST_ALARM_COUNT_).
 - Lo anterior, garantizando que no se den condiciones de carrera.
+
+para que la busqueda se detenga apenas los hilos junten las 5 ocurrencias se uso un AtomicInteger compartido
+entre todos los hilos.
+
+en la corrida se ve que se revisaron 57.971 listas de 80.000, o sea la busqueda si se detuvo antes de recorrer
+todo. en el host igual quedo reportado como NOT trustworthy y se encontraron las mismas 5 lista, 
+asi que parar temprano no cambio el resultado. ese numero cambia en cada
+ejecucion porque depende de cual hilo llegue primero a la quinta ocurrencia, pero nunca llega a 80.000
+
+![alt text](img/image-9.png)
+
+en HostSearchThread cada hilo recibe por constructor la misma referencia del contador (ocurrenciasTotales) y el
+tope (alarmCount). el for gano una segunda condicion: sigue mientras le queden listas Y mientras entre todos no
+se hayan encontrado 5 ocurrencias. cuando encuentra una la guarda en su lista local y ademas hace
+incrementAndGet() sobre el contador compartido. asi cada hilo se detiene solo, porque un hilo no se puede
+detener desde afuera: lo unico que se puede hacer es que el mismo revise una condicion y salga de su ciclo
+
+![alt text](img/image-7.png)
+
+en HostBlackListsValidator el AtomicInteger se crea una sola vez y se le pasa a los 500 hilos, o sea todos
+apuntan al mismo objeto. si cada hilo tuviera el suyo nunca sabrian el total. el reparto de segmentos y los
+join() quedaron igual, y el reporte de confiable / no confiable quedo despues del ciclo para que se haga una
+sola vez
+
+![alt text](img/image-8.png)
+
+se uso AtomicInteger y no un int normal porque contador++ no es atomico: son tres pasos (leer, sumar, escribir)
+y dos hilos pueden leer el mismo valor y perder un incremento, que es justo la condicion de carrera que pide
+evitar el enunciado. si se perdieran ocurrencias el contador podria no llegar nunca a 5 y el host terminaria
+reportado como confiable siendo peligroso. incrementAndGet() hace los tres pasos como una sola operacion
+indivisible
+
 
 ##### Parte III. – Avance para el martes, antes de clase.
 
@@ -36,11 +145,44 @@ Sincronización y Dead-Locks.
 
 2. Revise el código e identifique cómo se implemento la funcionalidad antes indicada. Dada la intención del juego, un invariante debería ser que la sumatoria de los puntos de vida de todos los jugadores siempre sea el mismo(claro está, en un instante de tiempo en el que no esté en proceso una operación de incremento/reducción de tiempo). Para este caso, para N jugadores, cual debería ser este valor?.
 
+para este caso, en primera instancia vemos que el valor para cada unno de manera individual es de 100, pero en este caso como es la sumatoria de los N jugadores seria de N x 100
+
 3. Ejecute la aplicación y verifique cómo funcionan las opción ‘pause and check’. Se cumple el invariante?.
+
+no, el invariante no se cumple. con N inmortales la suma deberia quedarse en N x 100, pero sale mayor y sigue
+creciendo cada vez que se oprime el boton, por ejemplo con 8 inmortales, que deberian sumar 800 a los 3 segundos ya sumaban 7390. 
+
+![alt text](img/image-10.png)
+
 
 4. Una primera hipótesis para que se presente la condición de carrera para dicha función (pause and check), es que el programa consulta la lista cuyos valores va a imprimir, a la vez que otros hilos modifican sus valores. Para corregir esto, haga lo que sea necesario para que efectivamente, antes de imprimir los resultados actuales, se pausen todos los demás hilos. Adicionalmente, implemente la opción ‘resume’.
 
+primero llamamos a Immortal.pauseAll(), que enciende una bandera que es
+compartida, el boton resume llama a Immortal.resumeAll(), que la apaga y despierta a los hilos dormidos.
+los dos son metodos static ya que la bandera es una sola para toda la clase, no una por inmortal y por eso se
+llaman con el nombre de la clase y no sobre un objeto.
+
+![alt text](img/image-12.png)
+
+en Immortal el hilo principal no duerme a nadie. pauseAll() solo pone paused en true y retorna. cada inmortal
+revisa esa bandera al inicio de cada vuelta de su run(), o sea entre pelea y pelea, y si esta encendida se
+duerme el mismo con pauseLock.wait(). 
+
+pauseLock es un new Object() vacio que existe solo para servir de candado. no se pudo usar la bandera porque un
+boolean es primitivo y no tiene monitor, ni this porque cada inmortal tendria el suyo y serian 8 candados
+distintos que no se excluyen entre si. es static para que sea uno solo y final para que la referencia no cambie.
+
+![alt text](img/image-11.png)
+
+
 5. Verifique nuevamente el funcionamiento (haga clic muchas veces en el botón). Se cumple o no el invariante?.
+
+no, el invariante sigue sin cumplirse. con 3 inmortales la suma deberia dar 300 y en la medicion nos dio 1040
+y cada vez que oprimimos resume se vuelve a pausar el numero sale mas grande 
+
+![alt text](img/image-13.png)
+
+aunque ahora la pausa si funciona y el resumen tambien 
 
 6. Identifique posibles regiones críticas en lo que respecta a la pelea de los inmortales. Implemente una estrategia de bloqueo que evite las condiciones de carrera. Recuerde que si usted requiere usar dos o más ‘locks’ simultáneamente, puede usar bloques sincronizados anidados:
 
@@ -51,6 +193,17 @@ Sincronización y Dead-Locks.
 		}
 	}
 	```
+
+	![alt text](img/image-14.png)
+
+	la region critica es en fight(), porque se modifica la salud de dos inmortales a la vez. usando synchronized anidados sobre this y i2, el if quedo adentro para que la lectura y la escritura de la salud no se puedan intercalar.
+
+	no se uso un lock comun porque eso haria que se volviera secuencial para todas las peleas
+
+	con esto el invariante ya se cumple exacto y por ejemplo con 8 inmortales la suma se queda en 800 en todas las
+	mediciones
+
+	![alt text](img/image-15.png)
 
 7. Tras implementar su estrategia, ponga a correr su programa, y ponga atención a si éste se llega a detener. Si es así, use los programas jps y jstack para identificar por qué el programa se detuvo.
 
