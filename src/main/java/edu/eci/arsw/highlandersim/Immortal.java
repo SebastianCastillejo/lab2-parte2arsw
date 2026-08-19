@@ -5,6 +5,10 @@ import java.util.Random;
 
 public class Immortal extends Thread {
 
+    private static final Object pauseLock = new Object();
+
+    private static boolean paused = false;
+
     private ImmortalUpdateReportCallback updateCallback=null;
     
     private int health;
@@ -27,9 +31,36 @@ public class Immortal extends Thread {
         this.defaultDamageValue=defaultDamageValue;
     }
 
+    // enciende la bandera
+    public static void pauseAll() {
+        synchronized (pauseLock) {
+            paused = true;
+        }
+    }
+
+    //apaga la bandera
+    public static void resumeAll() {
+        synchronized (pauseLock) {
+            paused = false;
+            pauseLock.notifyAll();
+        }
+    }
+
     public void run() {
 
         while (true) {
+
+            synchronized (pauseLock) {
+                while (paused) {
+                    try {
+                        pauseLock.wait();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+
             Immortal im;
 
             int myIndex = immortalsPopulation.indexOf(this);
@@ -48,7 +79,8 @@ public class Immortal extends Thread {
             try {
                 Thread.sleep(1);
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                Thread.currentThread().interrupt();
+                return;
             }
 
         }

@@ -92,10 +92,6 @@ en los primeros 5 segundos, antes de que arranque el consumidor, solo se imprime
 freno habria imprimido millones, asi que esas 5 lineas son la prueba de que el hilo quedo dormido en wait() y
 no girando.
 
-![alt text](image-4.png)
-
-![alt text](image-5.png)
-
 
 ##### Parte II. – Antes de terminar la clase.
 
@@ -151,11 +147,44 @@ Sincronización y Dead-Locks.
 
 2. Revise el código e identifique cómo se implemento la funcionalidad antes indicada. Dada la intención del juego, un invariante debería ser que la sumatoria de los puntos de vida de todos los jugadores siempre sea el mismo(claro está, en un instante de tiempo en el que no esté en proceso una operación de incremento/reducción de tiempo). Para este caso, para N jugadores, cual debería ser este valor?.
 
+para este caso, en primera instancia vemos que el valor para cada unno de manera individual es de 100, pero en este caso como es la sumatoria de los N jugadores seria de N x 100
+
 3. Ejecute la aplicación y verifique cómo funcionan las opción ‘pause and check’. Se cumple el invariante?.
+
+no, el invariante no se cumple. con N inmortales la suma deberia quedarse en N x 100, pero sale mayor y sigue
+creciendo cada vez que se oprime el boton, por ejemplo con 8 inmortales, que deberian sumar 800 a los 3 segundos ya sumaban 7390. 
+
+![alt text](image-10.png)
+
 
 4. Una primera hipótesis para que se presente la condición de carrera para dicha función (pause and check), es que el programa consulta la lista cuyos valores va a imprimir, a la vez que otros hilos modifican sus valores. Para corregir esto, haga lo que sea necesario para que efectivamente, antes de imprimir los resultados actuales, se pausen todos los demás hilos. Adicionalmente, implemente la opción ‘resume’.
 
+primero llamamos a Immortal.pauseAll(), que enciende una bandera que es
+compartida, el boton resume llama a Immortal.resumeAll(), que la apaga y despierta a los hilos dormidos.
+los dos son metodos static ya que la bandera es una sola para toda la clase, no una por inmortal y por eso se
+llaman con el nombre de la clase y no sobre un objeto.
+
+![alt text](image-12.png)
+
+en Immortal el hilo principal no duerme a nadie. pauseAll() solo pone paused en true y retorna. cada inmortal
+revisa esa bandera al inicio de cada vuelta de su run(), o sea entre pelea y pelea, y si esta encendida se
+duerme el mismo con pauseLock.wait(). 
+
+pauseLock es un new Object() vacio que existe solo para servir de candado. no se pudo usar la bandera porque un
+boolean es primitivo y no tiene monitor, ni this porque cada inmortal tendria el suyo y serian 8 candados
+distintos que no se excluyen entre si. es static para que sea uno solo y final para que la referencia no cambie.
+
+![alt text](image-11.png)
+
+
 5. Verifique nuevamente el funcionamiento (haga clic muchas veces en el botón). Se cumple o no el invariante?.
+
+no, el invariante sigue sin cumplirse. con 3 inmortales la suma deberia dar 300 y en la medicion nos dio 1040
+y cada vez que oprimimos resume se vuelve a pausar el numero sale mas grande 
+
+![alt text](image-13.png)
+
+aunque ahora la pausa si funciona y el resumen tambien 
 
 6. Identifique posibles regiones críticas en lo que respecta a la pelea de los inmortales. Implemente una estrategia de bloqueo que evite las condiciones de carrera. Recuerde que si usted requiere usar dos o más ‘locks’ simultáneamente, puede usar bloques sincronizados anidados:
 
