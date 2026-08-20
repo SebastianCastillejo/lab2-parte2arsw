@@ -1,4 +1,4 @@
-
+# Sebastian Castillego & Rafael Moreno
 ## Escuela Colombiana de Ingeniería
 ### Arquitecturas de Software – ARSW
 
@@ -207,15 +207,82 @@ aunque ahora la pausa si funciona y el resumen tambien
 
 7. Tras implementar su estrategia, ponga a correr su programa, y ponga atención a si éste se llega a detener. Si es así, use los programas jps y jstack para identificar por qué el programa se detuvo.
 
+si, se traba. con 8 inmortales a los pocos segundos la ventana se queda quieta, no pelean mas y pause and check
+deja de actualizar. el proceso sigue vivo, o sea no se cayo, pero los hilos se quedaron esperando entre ellos.
+
+con jps se saca el pid del java y con jstack se mira que estan haciendo los hilos. al final del dump sale
+esto:
+
+```
+Found one Java-level deadlock:
+"im5" waiting to lock ... which is held by "im6"
+"im6" waiting to lock ... which is held by "im5"
+```
+
+todos estan BLOCKED en fight(), en el segundo synchronized. im5 ya tiene su lock y quiere el de im6, e im6
+ya tiene el suyo y quiere el de im5. como cada uno espera al otro, nadie suelta nada y ahi se queda. eso
+pasa porque a veces se pelean al mismo tiempo y cada uno toma los locks al reves.
+
 8. Plantee una estrategia para corregir el problema antes identificado (puede revisar de nuevo las páginas 206 y 207 de _Java Concurrency in Practice_).
 
+la idea de esas paginas es siempre tomar los dos locks en el mismo orden, para que no se crucen.
+
+como el oponente sale al azar, se comparan los identityHashCode de this y de i2 y se bloquea primero el
+mas bajo. asi da igual quien ataque, im5 vs im6 e im6 vs im5 terminan agarrando los candados igual. si los
+hash salen iguales (casi nunca) se usa un tieLock antes, para que no entren los dos al mismo tiempo a esa
+rama.
+
+no se dejo un solo lock para todos porque ahi si ninguna pelea podria ir en paralelo.
+
+despues de eso se dejo corriendo un rato con 8 y jstack ya no sale deadlock, los hilos se la pasan en el
+sleep(1) y siguen peleando.
+
 9. Una vez corregido el problema, rectifique que el programa siga funcionando de manera consistente cuando se ejecutan 100, 1000 o 10000 inmortales. Si en estos casos grandes se empieza a incumplir de nuevo el invariante, debe analizar lo realizado en el paso 4.
+
+con 100 se volvio a romper la suma. el problema ya no era fight(), era el pause del punto 4: pauseAll()
+prendia la bandera y de una sumaba, pero con tantos hilos varios todavia estaban en la pelea o en el
+sleep(1) y no habian mirado la bandera. o sea se estaba leyendo la salud a medias, que con 3 casi no se
+notaba.
+
+para eso pauseAll ahora se queda esperando a que todos se duerman. hay un AtomicInteger que va contando
+cuantos ya hicieron wait(), y hasta que ese numero no sea el de hilos vivos no se suma. cada inmortal se
+pausa solo, igual que en el punto 4, solo que ahora el boton no sigue hasta que de verdad esten todos quietos.
+
+con eso ya da exacto en los tres casos, la suma se queda en N x 100 aunque ya hayan muerto varios (la vida
+se pasa, no se pierde). con 100 dio 10000, con 1000 dio 100000 y con 10000 dio 1000000. despues de resume
+y volver a pausar sigue igual.
 
 10. Un elemento molesto para la simulación es que en cierto punto de la misma hay pocos 'inmortales' vivos realizando peleas fallidas con 'inmortales' ya muertos. Es necesario ir suprimiendo los inmortales muertos de la simulación a medida que van muriendo. Para esto:
 	* Analizando el esquema de funcionamiento de la simulación, esto podría crear una condición de carrera? Implemente la funcionalidad, ejecute la simulación y observe qué problema se presenta cuando hay muchos 'inmortales' en la misma. Escriba sus conclusiones al respecto en el archivo RESPUESTAS.txt.
 	* Corrija el problema anterior __SIN hacer uso de sincronización__, pues volver secuencial el acceso a la lista compartida de inmortales haría extremadamente lenta la simulación.
 
+si, si se pone un remove() sobre el LinkedList que ya tenian todos, se arma carrera. esa lista la usan los
+hilos para escoger contra quien pelear y tambien la recorre pause and check para sumar, y LinkedList no
+aguanta que uno borre mientras otro esta recorriendola.
+
+con pocos casi no se ve, pero con muchos revienta. con 500 salio ConcurrentModificationException hasta al
+dar start, porque los primeros ya estaban matando y borrando mientras el main todavia iba arrancando al
+resto. a veces tambien sale IndexOutOfBoundsException (un hilo pregunta el size, otro borra, y el get ya
+no calza) o la lista se daña y el programa se queda colgado. eso mismo esta en RESPUESTAS.txt.
+
+no se le puso synchronized a la lista porque el enunciado dice que no, y ademas dejaria todas las peleas
+en fila. se cambio el LinkedList por un CopyOnWriteArrayList, que es concurrente, entonces el remove del
+muerto no necesita un lock nuestro y el for de pause and check ya no lanza la exception.
+
+cuando alguien queda en 0 se saca de la lista. el hilo que se murio, en la siguiente vuelta se da cuenta
+(health en 0 o ya no esta) y se sale. si entre el size y el get alguien borro, se atrapa el
+IndexOutOfBounds y se vuelve a intentar. con eso dejan de pelear contra muertos y la lista se va
+achicando, en la de 10000 bajaron como a 400 vivos y la suma seguia en 1000000.
+
 11. Para finalizar, implemente la opción STOP.
+
+el boton STOP estaba pintado pero no hacia nada. se le puso que llame a Immortal.stopAll(), que prende una
+bandera stopped parecida a la de pause, suelta a los que estaban dormidos con notifyAll(), y cada hilo
+en su ciclo mira esa bandera y se sale. el hilo no se mata desde afuera, se detiene solo, igual que para
+pausar.
+
+cuando se oprime, deja de pelear y la etiqueta queda en Simulation stopped. pause y resume siguen
+funcionando mientras no se haya dado stop.
 
 <!--
 ### Criterios de evaluación

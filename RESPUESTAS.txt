@@ -1,0 +1,19 @@
+si, quitar los muertos de la lista compartida si puede armar condicion de carrera.
+
+todos los hilos usan esa lista para escoger contra quien pelear (size, indexOf, get) y pause and check
+tambien la recorre para sumar. era un LinkedList, y esa coleccion no esta hecha para que uno borre mientras
+otro esta recorriendola.
+
+con 3 inmortales casi no se nota, pero con muchos se daña. lo que vimos:
+
+con 500 salio ConcurrentModificationException hasta al dar start, porque los primeros ya estaban matando y
+sacando gente de la lista mientras el main todavia iba haciendo start() del resto. tambien puede salir
+IndexOutOfBoundsException, un hilo pregunta el size, otro borra, y el get ya no calza. a veces ni lanza
+exception y el programa se queda colgado, como si la lista hubiera quedado mal por dentro.
+
+no se le puso synchronized a la lista porque el enunciado dice que no, y ademas dejaria todas las peleas
+en fila y con 1000 o 10000 se volveria lentisimo.
+
+se cambio el LinkedList por un CopyOnWriteArrayList, que es concurrente, entonces se puede borrar al
+muerto sin un lock nuestro y el for de pause and check ya no truena. si entre el size y el get alguien
+alcanzo a borrar, se atrapa el IndexOutOfBounds y se vuelve a intentar.
